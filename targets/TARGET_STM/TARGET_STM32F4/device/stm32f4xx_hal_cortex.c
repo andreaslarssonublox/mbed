@@ -164,7 +164,7 @@ void HAL_NVIC_SetPriorityGrouping(uint32_t PriorityGroup)
   assert_param(IS_NVIC_PRIORITY_GROUP(PriorityGroup));
   
   /* Set the PRIGROUP[10:8] bits according to the PriorityGroup parameter value */
-  NVIC_SetPriorityGrouping(PriorityGroup);
+	__NVIC_SetPriorityGrouping(PriorityGroup);
 }
 
 /**

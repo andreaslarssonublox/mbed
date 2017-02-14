@@ -1,7 +1,7 @@
 /* mbed Microcontroller Library
  * CMSIS-style functionality to support dynamic vectors
  *******************************************************************************
- * Copyright (c) 2014, STMicroelectronics
+ * Copyright (c) 2015, STMicroelectronics
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -32,7 +32,7 @@
 #ifndef MBED_CMSIS_NVIC_H
 #define MBED_CMSIS_NVIC_H
 
-// STM32F439ZI
+// STM32F429ZI
 // CORE: 16 vectors = 64 bytes from 0x00 to 0x3F
 // MCU Peripherals: 91 vectors = 364 bytes from 0x40 to 0x1AB
 // Total: 107 vectors = 428 bytes (0x1AC) to be reserved in RAM
@@ -45,8 +45,8 @@
 extern "C" {
 #endif
 
-void NVIC_SetVector(IRQn_Type IRQn, uint32_t vector);
-uint32_t NVIC_GetVector(IRQn_Type IRQn);
+void __NVIC_SetVector(IRQn_Type IRQn, uint32_t vector);
+uint32_t __NVIC_GetVector(IRQn_Type IRQn);
 
 #ifdef __cplusplus
 }
