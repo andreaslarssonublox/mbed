@@ -73,7 +73,10 @@ emac_stack_mem_t *emac_stack_mem_chain_dequeue(emac_stack_t* stack, emac_stack_m
 {
     struct pbuf **list = (struct pbuf**)chain;
     struct pbuf *head = *list;
-    *list = (*list)->next;
+    if (*list != NULL)
+    {
+        *list = (*list)->next;        
+    }
 
     return (emac_stack_mem_t *)head;
 }
