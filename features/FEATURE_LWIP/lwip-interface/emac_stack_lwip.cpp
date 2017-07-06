@@ -71,11 +71,16 @@ void emac_stack_mem_set_len(emac_stack_t* stack, emac_stack_mem_t *mem, uint32_t
 
 emac_stack_mem_t *emac_stack_mem_chain_dequeue(emac_stack_t* stack, emac_stack_mem_chain_t **chain)
 {
-    struct pbuf **list = (struct pbuf**)chain;
-    struct pbuf *head = *list;
-    *list = (*list)->next;
+    if ((chain != NULL) && (*chain != NULL)) {
+        struct pbuf **list = (struct pbuf**)chain;
+        struct pbuf *head = *list;
+        *list = (*list)->next;
 
-    return (emac_stack_mem_t *)head;
+        return (emac_stack_mem_t *)head;
+    }
+    else {
+        return chain;
+   }
 }
 
 uint32_t emac_stack_mem_chain_len(emac_stack_t* stack, emac_stack_mem_chain_t *chain)
