@@ -1,10 +1,10 @@
 /**
   ******************************************************************************
-  * @file      startup_stm32f439xx.s
+  * @file      startup_stm32f429xx.s
   * @author    MCD Application Team
-  * @version   V2.6.0
-  * @date      04-November-2016
-  * @brief     STM32F439xx Devices vector table for GCC based toolchains. 
+  * @version   V2.3.0
+  * @date      02-March-2015 
+  * @brief     STM32F429xx Devices vector table for Atollic TrueSTUDIO toolchain. 
   *            This module performs:
   *                - Set the initial SP
   *                - Set the initial PC == Reset_Handler,
@@ -72,10 +72,10 @@ defined in linker script */
     .section  .text.Reset_Handler
   .weak  Reset_Handler
   .type  Reset_Handler, %function
-Reset_Handler: 
-  ldr   sp, =_estack       /* set stack pointer */
- 
-/* Copy the data segment initializers from flash to SRAM */  
+Reset_Handler:
+  ldr   sp, =__stack       /* set stack pointer */
+
+/* Copy the data segment initializers from flash to SRAM */
   movs  r1, #0
   b  LoopCopyDataInit
 
@@ -93,6 +93,12 @@ LoopCopyDataInit:
   bcc  CopyDataInit
 
 /* Call the clock system intitialization function.*/
+  bl SystemInitPre
+  bl HAL_InitPre
+#if defined(FEATURE_UVISOR) && defined(TARGET_UVISOR_SUPPORTED)
+  ldr r0, =uvisor_init
+  blx r0
+#endif /* defined(FEATURE_UVISOR) && defined(TARGET_UVISOR_SUPPORTED) */
   bl  SystemInit   
 /* Call static constructors */
   //bl __libc_init_array
@@ -127,10 +133,10 @@ Infinite_Loop:
 *******************************************************************************/
    .section  .isr_vector,"a",%progbits
   .type  g_pfnVectors, %object
-  .size  g_pfnVectors, .-g_pfnVectors 
-  
-  g_pfnVectors:
-  .word  _estack
+  .size  g_pfnVectors, .-g_pfnVectors
+   
+g_pfnVectors:
+  .word  __stack
   .word  Reset_Handler
 
   .word  NMI_Handler
@@ -197,7 +203,7 @@ Infinite_Loop:
   .word     TIM8_TRG_COM_TIM14_IRQHandler     /* TIM8 Trigger and Commutation and TIM14 */
   .word     TIM8_CC_IRQHandler                /* TIM8 Capture Compare         */                          
   .word     DMA1_Stream7_IRQHandler           /* DMA1 Stream7                 */                          
-  .word     FMC_IRQHandler                    /* FMC                          */                   
+  .word     FMC_IRQHandler                    /* FMC                         */                   
   .word     SDIO_IRQHandler                   /* SDIO                         */                   
   .word     TIM5_IRQHandler                   /* TIM5                         */                   
   .word     SPI3_IRQHandler                   /* SPI3                         */                   
@@ -237,12 +243,10 @@ Infinite_Loop:
   .word     SPI5_IRQHandler                   /* SPI5 						  */
   .word     SPI6_IRQHandler                   /* SPI6						  */
   .word     SAI1_IRQHandler                   /* SAI1						  */
-  .word     LTDC_IRQHandler                   /* LTDC           		      */
-  .word     LTDC_ER_IRQHandler                /* LTDC error          	      */
+  .word     LTDC_IRQHandler                   /* LTDC_IRQHandler			  */
+  .word     LTDC_ER_IRQHandler                /* LTDC_ER_IRQHandler			  */
   .word     DMA2D_IRQHandler                  /* DMA2D                        */
   
-  
- 
 /*******************************************************************************
 *
 * Provide weak aliases for each Exception handler to the Default_Handler. 
