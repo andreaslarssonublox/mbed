@@ -1702,7 +1702,7 @@
         "macros": ["MBEDTLS_CONFIG_HW_SUPPORT", "HSE_VALUE=24000000", "HSE_STARTUP_TIMEOUT=5000", "CB_INTERFACE_SDIO","CB_CHIP_WL18XX","SUPPORT_80211D_ALWAYS","WLAN_ENABLED","MBEDTLS_ARC4_C","MBEDTLS_DES_C","MBEDTLS_MD4_C","MBEDTLS_MD5_C","MBEDTLS_SHA1_C"],
         "device_has_add": ["CAN", "EMAC", "TRNG", "FLASH"],
         "device_has_remove": ["RTC", "SLEEP"],
-        "features": ["LWIP"],
+        "features": ["LWIP","BLE"],
         "release_versions": ["5"],
         "device_name": "STM32F439ZI",
         "bootloader_supported": true,
