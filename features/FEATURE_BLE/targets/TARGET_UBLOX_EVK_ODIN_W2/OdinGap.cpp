@@ -18,6 +18,7 @@
 #include "OdinGap.h"
 #include "OdinGattServer.h"
 #include "cb_bt_man.h"
+#include "cb_main.h"
 #include "cb_bt_conn_man.h"
 #include "bt_types.h"
 #include <string.h>
@@ -31,6 +32,9 @@
 
 /**< Maximum Advertising interval in 625 us units, i.e. 10.24 s. */
 #define BLE_GAP_ADV_INTERVAL_MAX        0x4000 // TODO check
+
+/**< Create connection retry timeout when trying to connect forever(timeout=0) in ms */
+#define BLE_GAP_CREATE_CONN_TMO_FOREVER 1000
 
 namespace ble {
 namespace vendor {
@@ -48,66 +52,77 @@ namespace odin {
     {
         memcpy(addr, odin_addr->BdAddress, SIZE_OF_BD_ADDR);
     }
-    
-// Friend declared C-functions that calls corresponding Gap object member function
-    struct c_callb_s {    
 
-        static void handle_bcm_connect_ind(
-                cbBCM_Handle handle,
-            cbBCM_ConnectionInfo info)
-        {
-            Gap& gap = Gap::getInstance();
-        };
+    void handle_bcm_connect_ind(
+            cbBCM_Handle handle,
+        cbBCM_ConnectionInfo info)
+    {
+        Gap& gap = Gap::getInstance();
+    }
 
-        static void handle_bcm_connect_evt(
-                cbBCM_Handle handle,
-            cbBCM_ConnectionInfo info)
-        {
-            Gap& gap = Gap::getInstance();
-        };
+    void handle_bcm_connect_evt(
+            cbBCM_Handle handle,
+        cbBCM_ConnectionInfo info)
+    {
+        Gap& gap = Gap::getInstance();
+    }
 
-        static void handle_bcm_connect_cnf(
-                cbBCM_Handle bcm_handle,
-            cbBCM_ConnectionInfo info,
-            cb_int32 status)
-        {
-            //MBED_ASSERT(info.type == cbBCM_ACL_LE_CONNECTION);
+    void schedule_connect_acl_le(
+        cbBCM_Handle bcm_handle,
+        cbBCM_ConnectionInfo info,
+        cb_int32 status) {
             
-            Gap& gap = Gap::getInstance();
-            if (status == cbBCM_OK) {
-                Gap::Handle_t               handle = (Gap::Handle_t)bcm_handle;
-                Gap::Role_t                 role = Gap::CENTRAL;
-                BLEProtocol::AddressType_t  peer_addr_type = convert_odin_addr_type(&info.address);
-                BLEProtocol::AddressBytes_t peer_addr;
-                Gap::ConnectionParams_t     connection_params;
-                connection_params.connectionSupervisionTimeout = gap._ongoing_conn_timeout;
-                connection_params.maxConnectionInterval = gap._ongoing_conn_int_max;
-                connection_params.minConnectionInterval = gap._ongoing_conn_int_min;
-                connection_params.slaveLatency = gap._ongoing_conn_latency;
+        //MBED_ASSERT(info.type == cbBCM_ACL_LE_CONNECTION);
+        Gap& gap = Gap::getInstance();
+        if (status == cbBCM_OK) {
+            Gap::Handle_t               handle = (Gap::Handle_t)bcm_handle;
+            Gap::Role_t                 role = Gap::CENTRAL;
+            BLEProtocol::AddressType_t  peer_addr_type = convert_odin_addr_type(&info.address);
+            BLEProtocol::AddressBytes_t peer_addr;
+            Gap::ConnectionParams_t     connection_params;
+            connection_params.connectionSupervisionTimeout = gap._ongoing_conn_params.linkLossTimeout / 10;
+            connection_params.maxConnectionInterval = gap._ongoing_conn_params.connectionIntervalMax;
+            connection_params.minConnectionInterval = gap._ongoing_conn_params.connectionIntervalMin;
+            connection_params.slaveLatency = gap._ongoing_conn_params.connectionLatency;
             
-                copy_from_odin_addr(peer_addr, &info.address);
-                gap.processConnectionEvent(handle, role, peer_addr_type, peer_addr, gap._type, gap._addr, &connection_params);
-            }
-            else {
+            copy_from_odin_addr(peer_addr, &info.address);
+            gap.processConnectionEvent(handle, role, peer_addr_type, peer_addr, gap._type, gap._addr, &connection_params);
+        }
+        else {
+            if (gap._connect_state == Gap::S_CONN_CONNECTING) {
                 gap.processTimeoutEvent(Gap::TIMEOUT_SRC_CONN);
             }
-        };
-
-        static void handle_bcm_disconnect_evt(
-                cbBCM_Handle handle)
-        {
-            Gap& gap = Gap::getInstance();
-            gap.processDisconnectionEvent(handle, (Gap::DisconnectionReason_t)0x1f); // TODO pass HCI error code all the way instead see cb_bt_conn_man.c and cb_llc.c
-        };
-    };
-
-    static cbBCM_ConnectionCallback _bcm_connection_cb = 
+            else {
+                gap._bcm_handle = cbBCM_reqConnectAclLe(&info.address, &gap._ongoing_conn_params, &gap._conn_callback);
+            }
+        }
+    }
+    
+    void handle_bcm_connect_cnf(
+        cbBCM_Handle bcm_handle,
+        cbBCM_ConnectionInfo info,
+        cb_int32 status)
     {
-        c_callb_s::handle_bcm_connect_ind,
-        c_callb_s::handle_bcm_connect_evt,
-        c_callb_s::handle_bcm_connect_cnf,
-        c_callb_s::handle_bcm_disconnect_evt
-    };
+        EventQueue* eq = cbMAIN_getEventQueue();
+        eq->call(schedule_connect_acl_le, bcm_handle, info, status);
+        cbMAIN_dispatchEventQueue();
+    }
+
+    void schedule_bcm_disconnect_evt(
+            cbBCM_Handle handle)
+    {
+        Gap& gap = Gap::getInstance();
+        gap.processDisconnectionEvent(handle, (Gap::DisconnectionReason_t)0x1f); // TODO pass HCI error code all the way instead see cb_bt_conn_man.c and cb_llc.c
+    }
+    
+    void handle_bcm_disconnect_evt(
+            cbBCM_Handle handle)
+    {
+        EventQueue* eq = cbMAIN_getEventQueue();
+        eq->call(schedule_bcm_disconnect_evt, handle);
+        cbMAIN_dispatchEventQueue();
+    }
+    
 
 Gap &Gap::getInstance()
 {
@@ -129,7 +144,9 @@ ble_error_t Gap::getAddress(AddressType_t *typeP, Address_t address)
     MBED_ASSERT(typeP != NULL);
     
     TBdAddr odin_addr;
+    cbMAIN_driverLock();
     cb_int32 result = cbBM_getLocalAddress(&odin_addr);
+    cbMAIN_driverUnlock();
     MBED_ASSERT(result == cbBM_OK);
     copy_from_odin_addr(address, &odin_addr);
     *typeP = BLEProtocol::AddressType::PUBLIC; // This is the only local address type supported for now
@@ -159,50 +176,53 @@ ble_error_t Gap::connect(
     const ConnectionParams_t* connectionParams,
     const GapScanningParams* scanParamsIn)
 {
-    cbBCM_ConnectionParametersLe conn_params;
     cb_int32 result;
     cb_int32 interval;
     cb_int32 window;
     
+    if (_connect_state != S_CONN_IDLE) {
+        return BLE_STACK_BUSY;
+    }
+    
     if (connectionParams != NULL) {
-        conn_params.connectionIntervalMin = connectionParams->minConnectionInterval;
-        conn_params.connectionIntervalMax = connectionParams->maxConnectionInterval;
-        conn_params.connectionLatency     = connectionParams->slaveLatency;
-        conn_params.linkLossTimeout  = connectionParams->connectionSupervisionTimeout*10;
+        _ongoing_conn_params.connectionIntervalMin = connectionParams->minConnectionInterval;
+        _ongoing_conn_params.connectionIntervalMax = connectionParams->maxConnectionInterval;
+        _ongoing_conn_params.connectionLatency     = connectionParams->slaveLatency;
+        _ongoing_conn_params.linkLossTimeout  = connectionParams->connectionSupervisionTimeout * 10;
     }
     else {
-        conn_params.connectionIntervalMin = 50;  // Use NRF52 default value
-        conn_params.connectionIntervalMax = 100; // Use NRF52 default value
-        conn_params.connectionLatency     = 0;   // Use NRF52 default value
-        conn_params.linkLossTimeout       = 600; // Use NRF52 default value
+        _ongoing_conn_params.connectionIntervalMin = 50;  // Use NRF52 default value
+        _ongoing_conn_params.connectionIntervalMax = 100; // Use NRF52 default value
+        _ongoing_conn_params.connectionLatency     = 0;   // Use NRF52 default value
+        _ongoing_conn_params.linkLossTimeout       = 600; // Use NRF52 default value
     }
 	
     if (scanParamsIn != NULL) {
         interval = scanParamsIn->getInterval();
         window = scanParamsIn->getWindow();
-        conn_params.createConnectionTimeout = scanParamsIn->getTimeout()*1000;
+        _ongoing_conn_params.createConnectionTimeout = scanParamsIn->getTimeout() * 1000;
     }
     else {
         interval = _scanningParams.getInterval();
         window = _scanningParams.getWindow();
-        conn_params.createConnectionTimeout = _scanningParams.getTimeout()*1000;
+        _ongoing_conn_params.createConnectionTimeout = _scanningParams.getTimeout() * 1000;
     }
 
+    cbMAIN_driverLock();
     result = cbBM_setConnectScanWindow(window); // This might fail, don't return error
     
     result = cbBM_setConnectScanInterval(interval);
     if (result != cbBM_OK) {
+        cbMAIN_driverUnlock();
         return BLE_ERROR_INVALID_PARAM;
     }
 
     result = cbBM_setConnectScanWindow(window);
     if (result != cbBM_OK) {
+        cbMAIN_driverUnlock();
         return BLE_ERROR_INVALID_PARAM;
     }
     
-    // TODO handle timeout == 0 i.e. scan forever
-
-    // Connect
     TBdAddr address;
     memcpy(&address.BdAddress, peerAddr, SIZE_OF_BD_ADDR);
     if (peerAddrType == BLEProtocol::AddressType::PUBLIC) {
@@ -211,16 +231,25 @@ ble_error_t Gap::connect(
     else {
         address.AddrType = BT_RANDOM_ADDRESS;
     }
-    _bcm_handle = cbBCM_reqConnectAclLe(&address, &conn_params, &_bcm_connection_cb);
+    
+    if (_ongoing_conn_params.createConnectionTimeout == 0) {
+        _connect_state = S_CONN_CONNECTING_FOREVER;
+    }
+    else {
+        _connect_state = S_CONN_CONNECTING;
+    }
+
+    if (_ongoing_conn_params.createConnectionTimeout == 0) {
+        _ongoing_conn_params.createConnectionTimeout = BLE_GAP_CREATE_CONN_TMO_FOREVER;
+    }
+
+    // Connect
+    _bcm_handle = cbBCM_reqConnectAclLe(&address, &_ongoing_conn_params, &_conn_callback);
+    cbMAIN_driverUnlock();
     if (_bcm_handle == cbBCM_INVALID_CONNECTION_HANDLE) {
+        _connect_state = S_CONN_IDLE;
         return BLE_ERROR_INTERNAL_STACK_FAILURE;
     }
-    _ongoing_conn_int_max = conn_params.connectionIntervalMax;
-    _ongoing_conn_int_min = conn_params.connectionIntervalMin;
-    _ongoing_conn_latency = conn_params.connectionLatency;
-    _ongoing_conn_timeout = conn_params.linkLossTimeout / 10;
-    
-    // TODO Set state or send message to thread?
     
     return BLE_ERROR_NONE;
 }
@@ -297,7 +326,9 @@ ble_error_t Gap::stopAdvertising(void)
 ble_error_t Gap::disconnect(Handle_t connectionHandle, DisconnectionReason_t reason)
 {
     (void)reason; // The ODIN C API does not support passing a reason
+    cbMAIN_driverLock();
     cb_int32 ret_value = cbBCM_cmdDisconnect((cbBCM_Handle)connectionHandle);
+    cbMAIN_driverUnlock();
     if (ret_value != cbBCM_OK)
     {
         return BLE_ERROR_UNSPECIFIED;
@@ -418,10 +449,15 @@ ble_error_t Gap::reset(void)
 
 Gap::Gap() :
     ::Gap(),
-    _connectionHandle(0) // TODO invalid connection handle here?
+    _connectionHandle(0), // TODO invalid connection handle here?
+    _connect_state(S_CONN_IDLE)
 {
     ble_error_t status = getAddress(&_type, _addr);
     MBED_ASSERT(status == BLE_ERROR_NONE);
+    _conn_callback.pfConnectInd = handle_bcm_connect_ind;
+    _conn_callback.pfConnectEvt = handle_bcm_connect_evt;
+    _conn_callback.pfConnectCnf = handle_bcm_connect_cnf;
+    _conn_callback.pfDisconnectEvt = handle_bcm_disconnect_evt;
 }
 
 } // namespace odin

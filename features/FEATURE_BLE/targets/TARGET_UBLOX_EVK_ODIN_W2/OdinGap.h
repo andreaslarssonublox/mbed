@@ -188,23 +188,31 @@ public:
     virtual ble_error_t reset(void);
 
 private:
+    
+    enum ConnectState {
+        S_CONN_IDLE               = 1,
+        S_CONN_CONNECTING,
+        S_CONN_CONNECTING_FOREVER
+    };
+
     Gap();
 
     Gap(Gap const &);
     void operator=(Gap const &);
 
-    friend struct c_callb_s;
+    friend void handle_bcm_connect_ind(cbBCM_Handle handle, cbBCM_ConnectionInfo info);
+    friend void handle_bcm_connect_evt(cbBCM_Handle handle, cbBCM_ConnectionInfo info);
+    friend void schedule_connect_acl_le(cbBCM_Handle bcm_handle, cbBCM_ConnectionInfo info, cb_int32 status);
+    friend void schedule_bcm_disconnect_evt(cbBCM_Handle handle);
+    cbBCM_ConnectionCallback _conn_callback;
     
     uint16_t _connectionHandle;
     addr_type_t _type;
     Address_t _addr;
     
-    uint16_t _ongoing_conn_int_min;
-    uint16_t _ongoing_conn_int_max;
-    uint16_t _ongoing_conn_timeout;
-    uint16_t _ongoing_conn_latency;
-    
+    cbBCM_ConnectionParametersLe _ongoing_conn_params;
     cbBCM_Handle _bcm_handle;
+    ConnectState _connect_state;
 };
 
 } // namespace odin
