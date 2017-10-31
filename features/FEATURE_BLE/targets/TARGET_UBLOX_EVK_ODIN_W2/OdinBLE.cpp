@@ -34,15 +34,16 @@ BLEInstanceBase *createBLEInstance()
     return (&(ble::vendor::odin::BLE::deviceInstance()));
 }
 
-static void controllerStartupComplete(void)
-{
-    
-}
-
 namespace ble {
 namespace vendor {
 namespace odin {
 
+void handle_controller_startup_complete_stack(void)
+{
+    BLE& ble = BLE::deviceInstance();
+    ble.handle_controller_startup_complete();
+}
+    
 BLE::BLE() :
     initialization_status(NOT_INITIALIZED),
     instanceID(::BLE::DEFAULT_INSTANCE)
@@ -61,6 +62,43 @@ BLE& BLE::deviceInstance()
     return instance;
 }
 
+ble_error_t BLE::init(FunctionPointerWithContext< ::BLE::InitializationCompleteCallbackContext*> initCallback,
+        struct BLE::InitParams_t params)
+{   
+    switch (initialization_status) {
+    case NOT_INITIALIZED:
+        {
+            cbMAIN_BtInitParams initParams;
+            _init_callback = initCallback;
+
+            if (params.role == Gap::CENTRAL) {
+                initParams.leRole = cbBM_LE_ROLE_CENTRAL;
+            } else {
+                initParams.leRole = cbBM_LE_ROLE_PERIPHERAL;
+            }
+            cbBT_UTILS_setInvalidBdAddr(&initParams.address);
+            initParams.maxOutputPower = params.max_output_pwr;
+            initParams.maxLinkKeysLe = params.max_linkkeys;
+            initParams.maxLinkKeysClassic = params.max_linkkeys; // TODO we need to document this or? Should 0 be used instead?
+    
+            //cbMAIN_driverLock(); // TODO should we add protection in cbMAIN instead?
+            cbMAIN_initBt(&initParams, handle_controller_startup_complete_stack);
+            //cbMAIN_driverUnlock();
+            cbMAIN_startOS(); // TODO fix startOS so it can only be called once
+        }
+        return BLE_ERROR_NONE;
+
+    case INITIALIZING:
+        return BLE_ERROR_INITIALIZATION_INCOMPLETE;
+
+    case INITIALIZED:
+        return BLE_ERROR_NONE;
+
+    default:
+        return BLE_ERROR_UNSPECIFIED;
+    }    
+}
+
 ble_error_t BLE::init(
     ::BLE::InstanceID_t instanceID,
     FunctionPointerWithContext< ::BLE::InitializationCompleteCallbackContext *> initCallback)
@@ -69,6 +107,7 @@ ble_error_t BLE::init(
     switch (initialization_status) {
         case NOT_INITIALIZED:
         {
+            cb_int32 result;
             _init_callback = initCallback;
 
             cbMAIN_BtInitParams initParams;
@@ -79,9 +118,11 @@ ble_error_t BLE::init(
             initParams.maxLinkKeysLe = 25;
     
             //cbMAIN_driverLock(); // TODO should we add protection in cbMAIN instead?
-            cbMAIN_initBt(&initParams, controllerStartupComplete);
+            cbMAIN_initBt(&initParams, handle_controller_startup_complete_stack);
             //cbMAIN_driverUnlock();
             cbMAIN_startOS(); // TODO fix startOS so it can only be called once
+            result = cbBCM_setMaxLinksLE(7);
+            
          }
          return BLE_ERROR_NONE;
 
@@ -112,9 +153,7 @@ ble_error_t BLE::shutdown()
 
 const char* BLE::getVersion()
 {
-    //static const char version[] = "generic-cordio";
-    // TODO
-    return "Not implemented";
+    return cbBM_getStackVersionString();
 }
 
 Gap& BLE::getGap()
@@ -162,6 +201,16 @@ void BLE::processEvents()
     // Do nothing, handled in the driver thread
  }
 
+void BLE::handle_controller_startup_complete()
+{
+    ::BLE::InitializationCompleteCallbackContext context = {
+        ::BLE::Instance(::BLE::DEFAULT_INSTANCE),
+        BLE_ERROR_NONE
+    };
+    
+    _init_callback.call(&context);
+}
+    
 FunctionPointerWithContext< ::BLE::InitializationCompleteCallbackContext*> BLE::_init_callback;
 
 } // namespace odin

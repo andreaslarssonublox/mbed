@@ -24,6 +24,8 @@
 #include "ble/Gap.h"
 #include "ble/GapScanningParams.h"
 
+#include "cb_bt_conn_man.h"
+
 namespace ble {
 namespace vendor {
 namespace odin {
@@ -35,7 +37,7 @@ class Gap : public ::Gap
 {
 public:
     /**
-     * Return the Gap singleton implementing ::Gap for the Odin stac.
+     * Return the Gap singleton implementing ::Gap for the Odin stack.
      */
     static Gap &getInstance();
 
@@ -191,9 +193,18 @@ private:
     Gap(Gap const &);
     void operator=(Gap const &);
 
-    uint16_t m_connectionHandle;
-    addr_type_t m_type;
-    Address_t m_addr;
+    friend struct c_callb_s;
+    
+    uint16_t _connectionHandle;
+    addr_type_t _type;
+    Address_t _addr;
+    
+    uint16_t _ongoing_conn_int_min;
+    uint16_t _ongoing_conn_int_max;
+    uint16_t _ongoing_conn_timeout;
+    uint16_t _ongoing_conn_latency;
+    
+    cbBCM_Handle _bcm_handle;
 };
 
 } // namespace odin

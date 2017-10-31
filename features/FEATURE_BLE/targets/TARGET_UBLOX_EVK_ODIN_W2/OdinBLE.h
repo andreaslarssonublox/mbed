@@ -52,11 +52,20 @@ class BLE : public ::BLEInstanceBase {
 
 public:
 
-    /**
-     * Access to the singleton containing the implementation of BLEInstanceBase
-     * for the Odin stack.
-     */
-    static BLE& deviceInstance();
+    static const uint8_t BLE_MAX_OUTPUT_PWR = 127;
+    
+    struct InitParams_t
+    {
+        Gap::Role_t role;
+        uint32_t max_output_pwr;
+        uint32_t max_linkkeys;
+    };
+    
+/**
+ * Access to the singleton containing the implementation of BLEInstanceBase
+ * for the Odin stack.
+ */
+static BLE& deviceInstance();
 
     /**
     * @see BLEInstanceBase::init
@@ -65,6 +74,12 @@ public:
         ::BLE::InstanceID_t instanceID,
         FunctionPointerWithContext< ::BLE::InitializationCompleteCallbackContext*> initCallback
     );
+
+    /**
+    * @ Initialize with parameters
+    */
+    ble_error_t init(FunctionPointerWithContext< ::BLE::InitializationCompleteCallbackContext*> initCallback,
+        struct InitParams_t params);
 
     /**
      * @see BLEInstanceBase::hasInitialized
@@ -128,6 +143,8 @@ public:
 
 private:
 
+    friend void handle_controller_startup_complete_stack();
+    void handle_controller_startup_complete();
     static FunctionPointerWithContext< ::BLE::InitializationCompleteCallbackContext*> _init_callback;
 
     enum {
