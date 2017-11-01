@@ -23,6 +23,7 @@
 #include "ble/GapAdvertisingData.h"
 #include "ble/Gap.h"
 #include "ble/GapScanningParams.h"
+#include "EventFlags.h"
 
 #include "cb_bt_conn_man.h"
 
@@ -144,16 +145,6 @@ public:
     );
 
     /**
-     * Set the internal connection handle
-     */
-    void setConnectionHandle(uint16_t m_connectionHandle);
-
-    /**
-     * Get the current connection handle
-     */
-    uint16_t getConnectionHandle();
-
-    /**
      * @see ::Gap::getPreferredConnectionParams
      */
     virtual ble_error_t getPreferredConnectionParams(ConnectionParams_t *params);
@@ -206,13 +197,16 @@ private:
     friend void schedule_bcm_disconnect_evt(cbBCM_Handle handle);
     cbBCM_ConnectionCallback _conn_callback;
     
-    uint16_t _connectionHandle;
+    friend void handle_bm_dev_disc_evt(TBdAddr *addr, cb_int8 rssi, cb_char *name, TAdvData *adv_data);
+    friend void handle_bm_dev_disc_complete_evt(cb_int32 status);
+    
     addr_type_t _type;
     Address_t _addr;
     
     cbBCM_ConnectionParametersLe _ongoing_conn_params;
-    cbBCM_Handle _bcm_handle;
+    cbBCM_Handle _ongoing_conn_bcm_handle; // TODO needed?
     ConnectState _connect_state;
+    rtos::EventFlags _scan_completed_event;
 };
 
 } // namespace odin

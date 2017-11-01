@@ -53,6 +53,26 @@ namespace odin {
         memcpy(addr, odin_addr->BdAddress, SIZE_OF_BD_ADDR);
     }
 
+    GapAdvertisingParams::AdvertisingType_t convert_odin_adv_event_type(TAdvEventType type)
+    {
+        switch (type)
+        {
+        case BT_ADV_EVENT_TYPE_CONNECTABLE_UNDIRECTED:
+            return GapAdvertisingParams::ADV_CONNECTABLE_UNDIRECTED;
+        case BT_ADV_EVENT_TYPE_CONNECTABLE_DIRECTED:
+            return GapAdvertisingParams::ADV_CONNECTABLE_DIRECTED;
+        case BT_ADV_EVENT_TYPE_SCANNABLE_UNDIRECTED:
+            return GapAdvertisingParams::ADV_SCANNABLE_UNDIRECTED;
+        case BT_ADV_EVENT_TYPE_NOT_CONNECTABLE_UNDIRECTED:
+            return GapAdvertisingParams::ADV_NON_CONNECTABLE_UNDIRECTED;
+        case BT_ADV_EVENT_TYPE_SCAN_RSP:
+            return GapAdvertisingParams::ADV_NON_CONNECTABLE_UNDIRECTED; // Whatever value
+        default:
+            MBED_ASSERT(false);
+            return GapAdvertisingParams::ADV_CONNECTABLE_UNDIRECTED; // Whatever value, will never reach here
+        }
+    }
+    
     void handle_bcm_connect_ind(
             cbBCM_Handle handle,
         cbBCM_ConnectionInfo info)
@@ -93,7 +113,7 @@ namespace odin {
                 gap.processTimeoutEvent(Gap::TIMEOUT_SRC_CONN);
             }
             else {
-                gap._bcm_handle = cbBCM_reqConnectAclLe(&info.address, &gap._ongoing_conn_params, &gap._conn_callback);
+                gap._ongoing_conn_bcm_handle = cbBCM_reqConnectAclLe(&info.address, &gap._ongoing_conn_params, &gap._conn_callback);
             }
         }
     }
@@ -121,6 +141,25 @@ namespace odin {
         EventQueue* eq = cbMAIN_getEventQueue();
         eq->call(schedule_bcm_disconnect_evt, handle);
         cbMAIN_dispatchEventQueue();
+    }
+    
+    void handle_bm_dev_disc_evt(
+        TBdAddr *addr,
+        cb_int8 rssi,
+        cb_char *name,
+        TAdvData *adv_data)
+    {
+        bool is_scan_rsp = adv_data->type == BT_ADV_TYPE_SCAN;
+        GapAdvertisingParams::AdvertisingType_t adv_event_type = convert_odin_adv_event_type(adv_data->eventType);
+        Gap& gap = Gap::getInstance();
+        gap.processAdvertisementReport(addr->BdAddress, rssi, is_scan_rsp, adv_event_type, adv_data->length, adv_data->data);
+    }
+
+    void handle_bm_dev_disc_complete_evt(
+        cb_int32 status)
+    {
+        Gap& gap = Gap::getInstance();
+        gap._scan_completed_event.set(1);
     }
     
 
@@ -244,9 +283,9 @@ ble_error_t Gap::connect(
     }
 
     // Connect
-    _bcm_handle = cbBCM_reqConnectAclLe(&address, &_ongoing_conn_params, &_conn_callback);
+    _ongoing_conn_bcm_handle = cbBCM_reqConnectAclLe(&address, &_ongoing_conn_params, &_conn_callback);
     cbMAIN_driverUnlock();
-    if (_bcm_handle == cbBCM_INVALID_CONNECTION_HANDLE) {
+    if (_ongoing_conn_bcm_handle == cbBCM_INVALID_CONNECTION_HANDLE) {
         _connect_state = S_CONN_IDLE;
         return BLE_ERROR_INTERNAL_STACK_FAILURE;
     }
@@ -338,7 +377,7 @@ ble_error_t Gap::disconnect(Handle_t connectionHandle, DisconnectionReason_t rea
 
 ble_error_t Gap::disconnect(DisconnectionReason_t reason)
 {
-    // TODO
+    // For now we don't support this since we don't know what connection should be disconnected
     return BLE_ERROR_NONE;
 }
 
@@ -375,18 +414,6 @@ void Gap::getPermittedTxPowerValues(const int8_t **valueArrayPP, size_t *countP)
 {
     *valueArrayPP = NULL;
     *countP = 0;
-}
-
-void Gap::setConnectionHandle(uint16_t connectionHandle)
-{
-    // TODO how is this used?
-    _connectionHandle = connectionHandle;
-}
-
-uint16_t Gap::getConnectionHandle(void)
-{
-    // TODO how is this used?
-    return _connectionHandle;
 }
 
 ble_error_t Gap::getPreferredConnectionParams(ConnectionParams_t *params)
@@ -426,19 +453,92 @@ ble_error_t Gap::setPreferredConnectionParams(const ConnectionParams_t *params)
 
 ble_error_t Gap::updateConnectionParams(Handle_t handle, const ConnectionParams_t *newParams)
 {
-    // TODO
+    cb_int32 result;
+    cbBCM_ConnectionParametersLe odin_params;
+    odin_params.connectionIntervalMax = newParams->maxConnectionInterval;
+    odin_params.connectionIntervalMin = newParams->minConnectionInterval;
+    odin_params.connectionLatency = newParams->slaveLatency;
+    odin_params.linkLossTimeout = newParams->connectionSupervisionTimeout*10;
+    
+    cbMAIN_driverLock();
+    result = cbBCM_updateConnectionParams(handle, &odin_params);
+    cbMAIN_driverUnlock();
+    if (result != cbBCM_OK) {
+        return BLE_ERROR_INTERNAL_STACK_FAILURE;
+    }
+    // TODO peripheral - If NULL is provided on a peripheral role, the parameters in the PPCP characteristic of the GAP service will be used instead.
+    
     return BLE_ERROR_NONE;
 }
 
 ble_error_t Gap::startRadioScan(const GapScanningParams &scanningParams)
 {
-    // TODO
+    cb_int32 result;
+    cbBM_DeviceDiscoveryTypeLe type = cbBM_DEVICE_DISCOVERY_LE_ALL; // TODO or cbBM_DEVICE_DISCOVERY_LE_ALL_NO_FILTERING?
+    cb_uint16 discoveryLength = scanningParams.getTimeout();
+    cbBM_ScanTypeLe scanType;
+    
+    if (scanningParams.getActiveScanning() == true)
+    {
+        scanType = cbBM_ACTIVE_SCAN; 
+    }
+    else
+    {
+        scanType = cbBM_PASSIVE_SCAN; 
+    }
+    
+    cbMAIN_driverLock();
+    cb_int32 old_scan_interval = cbBM_getConnectScanInterval();
+    cb_int32 old_scan_window = cbBM_getConnectScanWindow();
+    
+    cbBM_setConnectScanInterval(scanningParams.getInterval()); // Ignore if failing, should succeed the second time(after setting window)
+    result = cbBM_setConnectScanWindow(scanningParams.getWindow());
+    if (result != cbBM_OK) {
+        cbMAIN_driverUnlock();
+        return BLE_ERROR_INVALID_PARAM;
+    }
+
+    result = cbBM_setConnectScanInterval(scanningParams.getInterval());
+    if (result != cbBM_OK) {
+        cbMAIN_driverUnlock();
+        return BLE_ERROR_INVALID_PARAM;
+    }
+    
+    // Discover. Blocking if already ongoing discovery will be detected by lower layer.
+    result = cbBM_deviceDiscoveryLe(type, discoveryLength, scanType, handle_bm_dev_disc_evt, handle_bm_dev_disc_complete_evt);
+    if (result != cbBM_OK) {
+        cbMAIN_driverUnlock();
+        return BLE_ERROR_INVALID_STATE;
+    }
+    _scan_completed_event.clear();
+    
+    // Restore old scan params
+    cbBM_setConnectScanInterval(old_scan_interval); // Ignore if failing, should succeed the second time(after setting window)
+    result = cbBM_setConnectScanWindow(old_scan_window);
+    MBED_ASSERT(result == cbBM_OK);
+    result = cbBM_setConnectScanInterval(old_scan_interval);
+    MBED_ASSERT(result == cbBM_OK);
+    
+    cbMAIN_driverUnlock();
+    
     return BLE_ERROR_NONE;
 }
 
 ble_error_t Gap::stopScan(void)
 {
-    // TODO
+    cb_int32 result;
+    
+    cbMAIN_driverLock();
+    result = cbBM_deviceDiscoveryLeCancel();
+    cbMAIN_driverUnlock();
+    if (result != cbBM_OK)
+    {
+        return BLE_ERROR_INVALID_STATE;
+    }
+    
+    // Scanning is not really completed from the odin stack point of view therefore it will
+    // fail if startScan is called immediately after. We wait till we get the handle_bm_dev_disc_complete_evt.
+    _scan_completed_event.wait_any(1);
     return BLE_ERROR_NONE;
 }
 
@@ -449,7 +549,7 @@ ble_error_t Gap::reset(void)
 
 Gap::Gap() :
     ::Gap(),
-    _connectionHandle(0), // TODO invalid connection handle here?
+    //_connectionHandle(0), // TODO invalid connection handle here?
     _connect_state(S_CONN_IDLE)
 {
     ble_error_t status = getAddress(&_type, _addr);
